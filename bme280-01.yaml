@@ -1,0 +1,54 @@
+esphome:
+  name: bme280-sensor-01
+  friendly_name: BME280 Sensor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: !secret static_ip_bme280_01
+    gateway: !secret gateway
+    subnet: !secret subnet
+    dns1: !secret dns1
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+
+logger:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+sensor:
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 60s
+    temperature:
+      name: "BME280 Temperature 01"
+      id: bme280_temperature_01
+      object_id: bme280_temperature_01
+      oversampling: 16x
+    pressure:
+      name: "BME280 Pressure 01"
+      id: bme280_pressure_01
+      object_id: bme280_pressure_01
+    humidity:
+      name: "BME280 Humidity 01"
+      id: bme280_humidity_01
+      object_id: bme280_humidity_01

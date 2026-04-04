@@ -1,0 +1,591 @@
+# =============================================================================
+# M5Stack CoreS3 Lite - Indoor/Outdoor Sensor Display
+# ESPHome + LVGL + Home Assistant
+# =============================================================================
+# Two pages:
+#   Page 1 (default): Indoor sensors (temp, humidity, CO2, AQI + fan icon)
+#   Page 2: Outdoor sensors (temp, humidity, pressure, AQI)
+# Tap the bottom button on screen to switch between pages.
+# =============================================================================
+
+substitutions:
+  devicename: cores3-display
+  upper_devicename: "CoreS3 Display"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${upper_devicename}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: !secret static_ip_cores3_display
+    gateway: !secret gateway
+    subnet: !secret subnet
+    dns1: !secret dns1
+
+  power_save_mode: none
+
+  ap:
+    ssid: "${upper_devicename} Fallback"
+    password: !secret wifi_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# =============================================================================
+# External Components (CoreS3 power management + IO expander)
+# =============================================================================
+external_components:
+  - source: github://m5stack/esphome-yaml/components
+    components: [axp2101, aw88298, aw9523b]
+
+# =============================================================================
+# Buses
+# =============================================================================
+i2c:
+  - id: bus_internal
+    sda: GPIO12
+    scl: GPIO11
+
+spi:
+  - id: spi_bus
+    clk_pin: GPIO36
+    mosi_pin: GPIO37
+
+# =============================================================================
+# Power Management (AXP2101)
+# =============================================================================
+axp2101:
+  id: axp2101_pmu
+  i2c_id: bus_internal
+
+# IO Expander (manages LCD reset, touch reset, etc.)
+aw9523b:
+  - id: aw9523b_hub
+    i2c_id: bus_internal
+
+# Power rail outputs
+output:
+  - platform: axp2101
+    type: range
+    channel: DLDO1
+    id: lcd_backlight_output
+    min_voltage: 2600
+    max_voltage: 3300
+  - platform: axp2101
+    channel: ALDO1
+    voltage: 1800
+  - platform: axp2101
+    channel: ALDO2
+    voltage: 3300
+  - platform: axp2101
+    channel: BLDO1
+    voltage: 2800
+  - platform: axp2101
+    channel: BLDO2
+    voltage: 1500
+
+# Backlight as a dimmable light
+light:
+  - platform: monochromatic
+    output: lcd_backlight_output
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+
+# =============================================================================
+# Display (320x240 IPS via MIPI SPI)
+# =============================================================================
+display:
+  - platform: mipi_spi
+    model: M5CORE
+    id: cores3_display
+    cs_pin: GPIO3
+    dc_pin: GPIO35
+    reset_pin:
+      aw9523b: aw9523b_hub
+      number: 9
+    data_rate: 40MHz
+    invert_colors: true
+    auto_clear_enabled: false
+
+# =============================================================================
+# Touchscreen (FT63X6 - capacitive touch on CoreS3)
+# =============================================================================
+touchscreen:
+  - platform: ft63x6
+    id: cores3_touch
+    display: cores3_display
+    reset_pin:
+      aw9523b: aw9523b_hub
+      number: 0
+    calibration:
+      x_min: 0
+      x_max: 320
+      y_min: 0
+      y_max: 240
+
+# =============================================================================
+# Font with MDI fan icon for air purifier display
+# =============================================================================
+font:
+  - file: "gfonts://Roboto"
+    id: fan_icon_font
+    size: 28
+    bpp: 4
+    glyphs: " "
+    extras:
+      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F0210"  # mdi-fan
+
+# =============================================================================
+# Home Assistant Sensors - Indoor
+# =============================================================================
+sensor:
+  - platform: homeassistant
+    id: indoor_temp
+    entity_id: sensor.bme688_temperature_indoor_01
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_indoor_temp_val
+            text: !lambda |-
+              return str_sprintf("%.1f°C", x);
+
+  - platform: homeassistant
+    id: indoor_humidity
+    entity_id: sensor.bme688_humidity_indoor_01
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_indoor_hum_val
+            text: !lambda |-
+              return str_sprintf("%.0f%%", x);
+
+  - platform: homeassistant
+    id: indoor_co2
+    entity_id: sensor.scd40_co2_indoor_01
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_indoor_co2_val
+            text: !lambda |-
+              return str_sprintf("%.0f ppm", x);
+        - if:
+            condition:
+              lambda: 'return x <= 1000;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_co2_val
+                  text_color: 0x00E400
+        - if:
+            condition:
+              lambda: 'return x > 1000 && x <= 1500;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_co2_val
+                  text_color: 0xFFFF00
+        - if:
+            condition:
+              lambda: 'return x > 1500 && x <= 2000;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_co2_val
+                  text_color: 0xFF7E00
+        - if:
+            condition:
+              lambda: 'return x > 2000;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_co2_val
+                  text_color: 0xFF0000
+
+  - platform: homeassistant
+    id: indoor_aqi
+    entity_id: sensor.pmsa003_aqi_indoor_01
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_indoor_aqi_val
+            text: !lambda |-
+              return str_sprintf("%.0f", x);
+        - if:
+            condition:
+              lambda: 'return x <= 50;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_aqi_val
+                  text_color: 0x00E400
+        - if:
+            condition:
+              lambda: 'return x > 50 && x <= 100;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_aqi_val
+                  text_color: 0xFFFF00
+        - if:
+            condition:
+              lambda: 'return x > 100 && x <= 150;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_aqi_val
+                  text_color: 0xFF7E00
+        - if:
+            condition:
+              lambda: 'return x > 150;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_indoor_aqi_val
+                  text_color: 0xFF0000
+
+# =============================================================================
+# Home Assistant Sensors - Outdoor
+# =============================================================================
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: sensor.environmental_outdoor_sen55_temperature
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_outdoor_temp_val
+            text: !lambda |-
+              return str_sprintf("%.1f°C", x);
+
+  - platform: homeassistant
+    id: outdoor_humidity
+    entity_id: sensor.environmental_outdoor_sen55_humidity
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_outdoor_hum_val
+            text: !lambda |-
+              return str_sprintf("%.0f%%", x);
+
+  - platform: homeassistant
+    id: outdoor_pressure
+    entity_id: sensor.bme688_pressure_indoor_01
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_outdoor_pres_val
+            text: !lambda |-
+              return str_sprintf("%.0f hPa", x);
+
+  - platform: homeassistant
+    id: outdoor_aqi
+    entity_id: sensor.environmental_outdoor_sen55_aqi_outdoor
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_outdoor_aqi_val
+            text: !lambda |-
+              return str_sprintf("%.0f", x);
+        - if:
+            condition:
+              lambda: 'return x <= 50;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_outdoor_aqi_val
+                  text_color: 0x00E400
+        - if:
+            condition:
+              lambda: 'return x > 50 && x <= 100;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_outdoor_aqi_val
+                  text_color: 0xFFFF00
+        - if:
+            condition:
+              lambda: 'return x > 100 && x <= 150;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_outdoor_aqi_val
+                  text_color: 0xFF7E00
+        - if:
+            condition:
+              lambda: 'return x > 150;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_outdoor_aqi_val
+                  text_color: 0xFF0000
+
+# =============================================================================
+# Home Assistant Text Sensor - Air Purifier Fan Level
+# =============================================================================
+text_sensor:
+  - platform: homeassistant
+    id: purifier_fan_level
+    entity_id: select.zhimi_rma3_0cae_fan_level_3
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_fan_icon
+            text_color: !lambda |-
+              if (x == "Level1") return lv_color_hex(0x1a5c1a);
+              if (x == "Level5") return lv_color_hex(0x2784F5);
+              if (x == "Level10") return lv_color_hex(0xEEF527);
+              if (x == "Level14") return lv_color_hex(0xcc2200);
+              return lv_color_hex(0xffffff);
+  - platform: homeassistant
+    id: purifier_power
+    entity_id: fan.zhimi_rma3_0cae_air_purifier_3
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return x == "off" || x == "unavailable";'
+            then:
+              - lvgl.label.update:
+                  id: lbl_fan_icon
+                  text_color: 0xffffff
+            else:
+              - lvgl.label.update:
+                  id: lbl_fan_icon
+                  text_color: !lambda |-
+                    auto level = id(purifier_fan_level).state;
+                    if (level == "Level1") return lv_color_hex(0x1a5c1a);
+                    if (level == "Level5") return lv_color_hex(0x2784F5);
+                    if (level == "Level10") return lv_color_hex(0xEEF527);
+                    if (level == "Level14") return lv_color_hex(0xcc2200);
+                    return lv_color_hex(0xffffff);
+# =============================================================================
+# LVGL Configuration
+# =============================================================================
+lvgl:
+  displays:
+    - cores3_display
+  touchscreens:
+    - cores3_touch
+  color_depth: 16
+  pages:
+
+    # ----- PAGE 1: INDOOR -----
+    - id: indoor_page
+      bg_color: 0x1a1a2e
+      widgets:
+        # Header
+        - label:
+            align: TOP_MID
+            y: 8
+            text: "INDOOR"
+            text_font: montserrat_20
+            text_color: 0x4fc3f7
+
+        # Temperature row
+        - label:
+            id: lbl_indoor_temp_label
+            x: 16
+            y: 48
+            text: "Temp"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_indoor_temp_val
+            x: 180
+            y: 40
+            text: "--.-°C"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # Humidity row
+        - label:
+            id: lbl_indoor_hum_label
+            x: 16
+            y: 88
+            text: "Humidity"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_indoor_hum_val
+            x: 180
+            y: 80
+            text: "--%"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # CO2 row
+        - label:
+            id: lbl_indoor_co2_label
+            x: 16
+            y: 128
+            text: "CO2"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_indoor_co2_val
+            x: 180
+            y: 120
+            text: "-- ppm"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # AQI row
+        - label:
+            id: lbl_indoor_aqi_label
+            x: 16
+            y: 168
+            text: "AQI"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_indoor_aqi_val
+            x: 180
+            y: 160
+            text: "--"
+            text_font: montserrat_28
+            text_color: 0xffffff
+
+        # Fan icon (air purifier speed indicator)
+        - label:
+            id: lbl_fan_icon
+            x: 284
+            y: 6
+            text: "\U000F0210"
+            text_font: fan_icon_font
+            text_color: 0xffffff
+
+        # Page switch button (bottom)
+        - button:
+            align: BOTTOM_MID
+            y: -4
+            width: 160
+            height: 32
+            bg_color: 0x0d47a1
+            radius: 8
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "OUTDOOR >"
+                  text_font: montserrat_14
+                  text_color: 0xffffff
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: outdoor_page
+                    animation: MOVE_LEFT
+                    time: 300ms
+
+    # ----- PAGE 2: OUTDOOR -----
+    - id: outdoor_page
+      bg_color: 0x1a2e1a
+      widgets:
+        # Header
+        - label:
+            align: TOP_MID
+            y: 8
+            text: "OUTDOOR"
+            text_font: montserrat_20
+            text_color: 0x81c784
+
+        # Temperature row
+        - label:
+            x: 16
+            y: 48
+            text: "Temp"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_outdoor_temp_val
+            x: 180
+            y: 40
+            text: "--.-°C"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # Humidity row
+        - label:
+            x: 16
+            y: 88
+            text: "Humidity"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_outdoor_hum_val
+            x: 180
+            y: 80
+            text: "--%"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # Pressure row
+        - label:
+            x: 16
+            y: 128
+            text: "Pressure"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_outdoor_pres_val
+            x: 180
+            y: 120
+            text: "-- hPa"
+            text_font: montserrat_26
+            text_color: 0xffffff
+
+        # AQI row
+        - label:
+            x: 16
+            y: 168
+            text: "AQI"
+            text_font: montserrat_14
+            text_color: 0x90a4ae
+        - label:
+            id: lbl_outdoor_aqi_val
+            x: 180
+            y: 160
+            text: "--"
+            text_font: montserrat_28
+            text_color: 0xffffff
+
+        # Page switch button (bottom)
+        - button:
+            align: BOTTOM_MID
+            y: -4
+            width: 160
+            height: 32
+            bg_color: 0x1b5e20
+            radius: 8
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "< INDOOR"
+                  text_font: montserrat_14
+                  text_color: 0xffffff
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: indoor_page
+                    animation: MOVE_RIGHT
+                    time: 300ms
