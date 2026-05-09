@@ -3,9 +3,9 @@ esphome:
   friendly_name: Environmental Outdoor SEN55
 
 esp32:
-  board: esp32-c3-devkitm-1
+  board: seeed_xiao_esp32c3
   framework:
-    type: esp-idf
+    type: arduino
 
 logger:
 
@@ -34,8 +34,8 @@ captive_portal:
 
 
 i2c:
-  sda: GPIO8
-  scl: GPIO9
+  sda: GPIO6
+  scl: GPIO7
   scan: true
   id: bus_a
 
