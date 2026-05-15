@@ -69,19 +69,22 @@ sensor:
 
   - platform: pmsx003
     type: PMSX003
+    update_interval: 60s
     pm_1_0:
       name: "Indoor PM 1.0"
+      force_update: true
     pm_2_5:
       name: "Indoor PM 2.5"
       id: pm_2_5_sensor
+      force_update: true
       filters:
         - heartbeat: 60s
     pm_10_0:
       name: "Indoor PM 10.0"
       id: pm_10_0_sensor
+      force_update: true
       filters:
         - heartbeat: 60s
-    update_interval: 60s
 
   - platform: aqi
     name: "Air Quality Index"
