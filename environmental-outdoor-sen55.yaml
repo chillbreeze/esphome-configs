@@ -79,8 +79,11 @@ sensor:
     nox:
       name: "NOx Index"
       id: sen55_nox
+      filters:
+        - heartbeat: 60s
     address: 0x69
     update_interval: 60s
+    
 
     temperature_compensation:
       offset: 1.6
