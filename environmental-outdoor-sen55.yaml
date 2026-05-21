@@ -74,6 +74,8 @@ sensor:
     voc:
       name: "VOC Index"
       id: sen55_voc
+      filters:
+        - heartbeat: 60s
     nox:
       name: "NOx Index"
       id: sen55_nox
