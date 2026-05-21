@@ -79,6 +79,7 @@ sensor:
     nox:
       name: "NOx Index"
       id: sen55_nox
+      force_update: true
       filters:
         - heartbeat: 60s
     address: 0x69
